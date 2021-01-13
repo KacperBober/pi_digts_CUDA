@@ -14,48 +14,63 @@ precisionType* fill_leibnitz_array(size_t free_mem)
 
 	precisionType* p_arr = new precisionType[elements_number];
 
-	for (int i = 0; i < elements_number; i++) {
+	for (int i = 1; i <= elements_number; i++) {
 		precisionType sign;
-		if (i % 2)  { sign = -1; }
+		if (i % 2 == 0)  { sign = -1; }
 		else	{ sign = 1; }
 
-		p_arr[i] = (precisionType) 4 * (sign / (2 * (i + 1) - 1));
+		p_arr[i-1] = (precisionType) 4*(sign / (2*i - 1));
 	}
 	return p_arr;
 }
 
 template <class precisionType>
-precisionType add_with_GPU(precisionType *leibnitz_arr, size_t free_mem) {
+__global__ void sum_leibnitz_elements(precisionType *pointer, unsigned long summations_number) {
+
+	unsigned long index = blockIdx.x * blockDim.x + threadIdx.x;
+
+		if (index < summations_number) {
+			pointer[index] += pointer[summations_number + index];
+		}
+	/* if number of elements is not even, we have to add last matrix element*/
+}
+
+template <class precisionType>
+void add_with_GPU(precisionType *leibnitz_arr, size_t free_mem) {
 
 	unsigned long total_threads = free_mem / sizeof(precisionType);
 	const int threads_per_block = 256;
-	int blocks_number = (total_threads + threads_per_block - 1) / threads_per_block;
+
+	precisionType x = 0;
+	precisionType *h_sum = &x;
+
+	precisionType oszustwo = 0;
 	
 	precisionType * d_leibnitz;
 	cudaMalloc(&d_leibnitz, free_mem);
 	cudaMemcpy(d_leibnitz, leibnitz_arr, free_mem, cudaMemcpyHostToDevice);
-	
-	/*
-	for ()... {
-		sum_leibnitz_elements << < blocks_number, threads_per_block >> > ()
-	}*/
-	
-}
 
-template <class precisionType>
-__global__ void sum_leibnitz_elements(precisionType *pointer, long int summations_number, bool parity) {
 
-	long int index = blockIdx.x * blockDim.x + threadIdx.x;
-	if (index < summations_number) {
-		pointer[index] = pointer[index] + pointer[summations_number + index];
+	unsigned long summation_threads = total_threads;
+	while(summation_threads >= 2) {
+
+		if (summation_threads % 2 == 1) {
+			oszustwo += leibnitz_arr[summation_threads];
+		}
+
+		summation_threads /= 2;
+		int blocks_number = (summation_threads + threads_per_block - 1) / threads_per_block;
+		sum_leibnitz_elements<precisionType><< < blocks_number, threads_per_block >> >(d_leibnitz, summation_threads);
 	}
 
-	__syncthreads();	//avoid two threads trying to access one memory address at the same time 
-	/* if number of elements is not even, we have to add last matrix element*/
-	if (index == summations_number && !parity) {
-		pointer[index - 1] = pointer[index - 1] + pointer[index];
-	} 
+	cudaMemcpy(h_sum, d_leibnitz, sizeof(precisionType), cudaMemcpyDeviceToHost);
+	*h_sum = *h_sum + oszustwo;
+
+	std::cout << std::endl << *h_sum;
+	
+	cudaFree(d_leibnitz);
 }
+
 
 template <class precisionType>
 precisionType add_with_CPU(precisionType *leibnitz_arr, size_t free_mem) {
@@ -73,22 +88,24 @@ int main()
 {
 	size_t free_mem, total_mem;
 	cudaMemGetInfo(&free_mem, &total_mem);
-
-	free_mem = free_mem - free_mem % 8; //making sure we have memory for multiple of 8
-
+	free_mem = free_mem - 100000;
+	//free_mem = free_mem - free_mem % 16; //making sure we have memory for multiple of 8
+	
+	
 	float* leibnitz_f = fill_leibnitz_array<float>(free_mem);
 	float sum_f = add_with_CPU<float>(leibnitz_f, free_mem);
 
 	std::cout.precision(15);
 	std::cout << std::fixed << sum_f;
 	delete[] leibnitz_f;
-
+	
 	double* leibnitz_d = fill_leibnitz_array<double>(free_mem);
 	double sum_d = add_with_CPU<double>(leibnitz_d, free_mem);
 
 	std::cout.precision(15);
 	std::cout << std::endl << std::fixed << sum_d;
 
+	add_with_GPU<double>(leibnitz_d, free_mem);
 	 
 	delete[] leibnitz_d;
 
